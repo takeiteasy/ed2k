@@ -3,7 +3,7 @@
 #include "queue_t/queue.h"
 
 #define CHUNK_SIZE 9728000
-#define BUF_SIZE   8000
+#define BUF_SIZE   4096
 #define THREADS    4
 
 void ed2k(void* arg) {
