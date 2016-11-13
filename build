@@ -1,0 +1,2 @@
+#!/bin/sh
+clang -I/usr/local/opt/openssl/include -L/usr/local/opt/openssl/lib -lssl -lcrypto thread_t/threads_posix.c queue_t/queue.c ed2k.c
