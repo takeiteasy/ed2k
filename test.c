@@ -4,7 +4,7 @@
 #include <sys/mman.h>
 #include <openssl/md4.h>
 #include "queue_t/queue.h"
-#include "../vector_t/vector.h"
+#include "vector_t/vector.h"
 
 #define CHUNK_SIZE 9728000
 #define BUF_SIZE   4096
