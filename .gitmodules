@@ -4,6 +4,3 @@
 [submodule "thread_t"]
 	path = thread_t
 	url = git@github.com:takeiteasy/thread_t.git
-[submodule "vector_t"]
-	path = vector_t
-	url = https://github.com/takeiteasy/vector_t

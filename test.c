@@ -4,6 +4,7 @@
 #include <sys/mman.h>
 #include <openssl/md4.h>
 #include "queue_t/queue.h"
+#include "../vector_t/vector.h"
 
 #define CHUNK_SIZE 9728000
 #define BUF_SIZE   4096
@@ -17,6 +18,11 @@ typedef struct {
   size_t    fs;
   queue_t  *q1, *q2;
 } hasher_arg;
+
+typedef struct {
+  int*     finished;
+  queue_t* q;
+} ed2k_arg;
 
 typedef struct {
   size_t offset;
@@ -58,24 +64,50 @@ void hasher(void* arg) {
 }
 
 void ed2k(void* arg) {
-  queue_t* q = (queue_t*)arg;
+  ed2k_arg* e = (ed2k_arg*)arg;
+  queue_t* q = (queue_t*)e->q;
   queue_node_t* qn;
+  vector_t* v = vector_init();
   int next = 0;
-  while (1) {
+  MD4_CTX root;
+  MD4_Init(&root);
+
+  while (*e->finished || v->length) {
     while (q->nodes) {
       qn = queue_get(q);
       hash_t* h = (hash_t*)qn->data;
       if (h->id == next) {
-        char* result = malloc(32 * sizeof(char*));
-        int i        = 0;
-        for(; i < MD4_DIGEST_LENGTH; ++i)
-          sprintf(&result[i * 2], "%02x", (unsigned int)h->hash[i]);
-        printf("%s -- %d\n", result, h->id);
+        MD4_Update(&root, h->hash, MD4_DIGEST_LENGTH);
+        printf("%d\n", h->id);
         ++next;
+        free(h);
+        free(qn);
       } else {
+        vector_push(v, (void*)h);
+      }
+    }
+
+    vector_for_each(v) {
+      hash_t* tmp = (hash_t*)vector_get(v, i);
+      if (tmp->id == next) {
+        MD4_Update(&root, tmp->hash, MD4_DIGEST_LENGTH);
+        printf("%d\n", tmp->id);
+        ++next;
+        vector_del(v, i);
       }
     }
   }
+
+  unsigned char md [MD4_DIGEST_LENGTH];
+  MD4_Final(md, &root);
+  char* result = malloc(32 * sizeof(char*));
+  int i        = 0;
+  for(; i < MD4_DIGEST_LENGTH; ++i)
+    sprintf(&result[i * 2], "%02x", (unsigned int)md[i]);
+  printf("%s\n", result);
+
+  vector_free(v);
+  free(result);
 }
 
 int main() {
@@ -100,9 +132,22 @@ int main() {
     queue_add(q1, (void*)chunk, sizeof(i));
   }
 
-  queue_t* q2 = queue_init();
-  thrd_t t1   = (thrd_t)malloc(sizeof(thrd_t));
-  thrd_create(&t1, ed2k, (void*)q2);
+  // queue_node_t* qn;
+  // while (q1->nodes) {
+  //   qn = queue_get(q1);
+  //   chunk_t* c = (chunk_t*)qn->data;
+  //   printf("%lu -- %d\n", c->offset, c->id);
+  //   free(qn);
+  // }
+  // exit(1);
+
+  int running = 1;
+  queue_t* q2  = queue_init();
+  ed2k_arg* e  = (ed2k_arg*)malloc(sizeof(ed2k_arg));
+  e->q         = q2;
+  e->finished  = &running;
+  thrd_t t1    = (thrd_t)malloc(sizeof(thrd_t));
+  thrd_create(&t1, ed2k, (void*)e);
   thrd_t* t2  = (thrd_t*)malloc(THREADS * sizeof(thrd_t));
 
   for (int i = 0; i < THREADS; ++i) {
@@ -116,10 +161,13 @@ int main() {
   }
   for (int i = 0; i < THREADS; ++i)
     thrd_join(t2[i], NULL);
+  running = 0;
+  thrd_join(t1, NULL);
 
   free(t2);
   free(q1);
   free(q2);
+  free(e);
 
   return 0;
 }
