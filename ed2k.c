@@ -1,82 +1,168 @@
 #include <stdio.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
 #include <openssl/md4.h>
 #include "queue_t/queue.h"
+#include "vector_t/vector.h"
 
 #define CHUNK_SIZE 9728000
 #define BUF_SIZE   4096
 #define THREADS    4
 
-void ed2k(void* arg) {
-  queue_t* q = (queue_t*)arg;
+// 4c565269678b60f1206151f130e647b9
+// 2423660392
+
+typedef struct {
+  int       id,
+            fh;
+  size_t    fs;
+  queue_t  *q1,
+           *q2;
+} hasher_arg;
+
+typedef struct {
+  int*     finished,
+           uneven;
+  queue_t* q;
+} ed2k_arg;
+
+typedef struct {
+  size_t offset;
+  int    id;
+} chunk_t;
+
+typedef struct {
+  unsigned char* hash;
+  int            id;
+} hash_t;
+
+void hasher(void* arg) {
+  hasher_arg* a = (hasher_arg*)arg;
   queue_node_t* qn;
-  while (q->nodes) {
-    qn = queue_get(q);
-    char* fn = (char*)qn->data;
+  while (a->q1->nodes) {
+    qn = queue_get(a->q1);
+    chunk_t* chunk = (chunk_t*)qn->data;
+    size_t data_size = (chunk->offset + CHUNK_SIZE > a->fs ? a->fs - chunk->offset : CHUNK_SIZE);
+    char* data = mmap(0, data_size, PROT_READ, MAP_SHARED, a->fh, chunk->offset);
+    if (data == MAP_FAILED)
+      exit(-1);
 
-    FILE* fh   = fopen(fn, "rb");
-    if (fh) {
-      fseek(fh, 0L, SEEK_END);
-      size_t fh_size = ftell(fh);
-      rewind(fh);
-      int too_small  = (fh_size < CHUNK_SIZE);
+    unsigned char* md = (unsigned char*)malloc(MD4_DIGEST_LENGTH * sizeof(unsigned char));
+    MD4_CTX root;
+    MD4_Init(&root);
+    MD4_Update(&root, data, data_size);
+    MD4_Final(md, &root);
 
-      unsigned char buf[BUF_SIZE];
-      unsigned char md [MD4_DIGEST_LENGTH];
-      MD4_CTX root;
-      MD4_CTX chunk;
-      MD4_Init(&root);
-      MD4_Init(&chunk);
+    hash_t* h = (hash_t*)malloc(sizeof(hash_t));
+    h->hash   = md;
+    h->id     = chunk->id;
+    queue_add(a->q2, (void*)h, sizeof(h));
 
-      size_t cur_len   = 0,
-             len       = 0,
-             cur_chunk = 0,
-             cur_buf   = 0;
-      while (fread(buf, sizeof(*buf), BUF_SIZE, fh) > 0) {
-        len        = ftell(fh);
-        cur_buf    = len - cur_len;
-        MD4_Update(&chunk, buf, cur_buf);
-        cur_len    = len;
-        cur_chunk += BUF_SIZE;
-
-        if (cur_chunk == CHUNK_SIZE && cur_buf == BUF_SIZE) {
-          cur_chunk = 0;
-          MD4_Final(md, &chunk);
-          MD4_Init(&chunk);
-          MD4_Update(&root, md, MD4_DIGEST_LENGTH);
-        }
-      }
-      MD4_Final(md, &chunk);
-
-      if (!too_small) {
-        MD4_Update(&root, md, MD4_DIGEST_LENGTH);
-        MD4_Final(md, &root);
-      }
-
-      char* result = malloc(32 * sizeof(char*));
-      int i        = 0;
-      for(; i < MD4_DIGEST_LENGTH; ++i)
-        sprintf(&result[i * 2], "%02x", (unsigned int)md[i]);
-      printf("%s|%ld|%s\n", fn, ftell(fh), result);
-
-      free(result);
-      fclose(fh);
-    }
     thrd_yield();
     free(qn);
+    free(chunk);
   }
   thrd_exit(0);
 }
 
-int main (int argc, const char *argv[]) {
-  queue_t* q = queue_init();
-  for (int i = 1; i < argc; ++i)
-    queue_add(q, (void*)argv[i], sizeof(argv[i]));
+void ed2k(void* arg) {
+  ed2k_arg* e = (ed2k_arg*)arg;
+  queue_t* q = (queue_t*)e->q;
+  queue_node_t* qn;
+  vector_t* v = vector_init();
+  int next = 0;
+  MD4_CTX root;
+  MD4_Init(&root);
 
-  thrd_t* t = malloc(THREADS * sizeof(thrd_t*));
+  while (*e->finished || v->length) {
+    while (q->nodes) {
+      qn = queue_get(q);
+      hash_t* h = (hash_t*)qn->data;
+      if (h->id == next) {
+        MD4_Update(&root, h->hash, MD4_DIGEST_LENGTH);
+        ++next;
+        free(h);
+        free(qn);
+      } else {
+        vector_push(v, (void*)h);
+      }
+    }
+
+    vector_for_each(v) {
+      hash_t* tmp = (hash_t*)vector_get(v, i);
+      if (tmp->id == next) {
+        MD4_Update(&root, tmp->hash, MD4_DIGEST_LENGTH);
+        ++next;
+        vector_del(v, i);
+      }
+    }
+  }
+
+  if (!e->uneven)
+    MD4_Update(&root, NULL, 0);
+
+  unsigned char md [MD4_DIGEST_LENGTH];
+  MD4_Final(md, &root);
+  char* result = malloc(32 * sizeof(char*));
+  for(int i; i < MD4_DIGEST_LENGTH; ++i)
+    sprintf(&result[i * 2], "%02x", (unsigned int)md[i]);
+  printf("%s\n", result);
+
+  vector_free(v);
+  free(result);
+}
+
+int main() {
+  char* test = "/Users/rusty/Downloads/DANDY-510.avi.mp4";
+  int fh     = open(test, O_RDONLY);
+  if (fh < 0)
+    return -1;
+
+  struct stat s;
+  int status = fstat (fh, &s);
+  if (status < 0)
+    return -1;
+  size_t f_size = s.st_size;
+
+  queue_t* q1 = queue_init();
+  size_t   i  = 0;
+  int      j  = 0;
+  for (; i < f_size; i += CHUNK_SIZE) {
+    chunk_t* chunk = (chunk_t*)malloc(sizeof(chunk_t));
+    chunk->offset  = i;
+    chunk->id      = j++;
+    queue_add(q1, (void*)chunk, sizeof(i));
+  }
+
+  int running  = 1;
+  queue_t* q2  = queue_init();
+  ed2k_arg* e  = (ed2k_arg*)malloc(sizeof(ed2k_arg));
+  e->q         = q2;
+  e->finished  = &running;
+  e->uneven    = (f_size % CHUNK_SIZE);
+  thrd_t t1    = (thrd_t)malloc(sizeof(thrd_t));
+  thrd_create(&t1, ed2k, (void*)e);
+  thrd_t* t2   = (thrd_t*)malloc(THREADS * sizeof(thrd_t));
+
+  for (int i = 0; i < THREADS; ++i) {
+    hasher_arg* ha = (hasher_arg*)malloc(sizeof(hasher_arg));
+    ha->id         = i;
+    ha->fh         = fh;
+    ha->fs         = f_size;
+    ha->q1         = q1;
+    ha->q2         = q2;
+    thrd_create(&t2[i], hasher, (void*)ha);
+  }
   for (int i = 0; i < THREADS; ++i)
-    thrd_create(&t[i], ed2k, (void*)q);
-  for (int i = 0; i < THREADS; ++i)
-    thrd_join(t[i], NULL);
+    thrd_join(t2[i], NULL);
+  running = 0;
+  thrd_join(t1, NULL);
+
+  free(t2);
+  free(q1);
+  free(q2);
+  free(e);
 
   return 0;
 }
