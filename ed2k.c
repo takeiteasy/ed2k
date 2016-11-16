@@ -60,7 +60,7 @@ void* ed2k() {
       int i        = 0;
       for(; i < MD4_DIGEST_LENGTH; ++i)
         sprintf(&result[i * 2], "%02x", (unsigned int)md[i]);
-      printf("%s|%ld|%s\n", files[this_file], ftell(fh), result);
+      printf("ed2k://|file|%s|%lu|%s|\n", files[this_file], ftell(fh), result);
 
       free(result);
       fclose(fh);
