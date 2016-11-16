@@ -10,7 +10,7 @@ Simple multi-threaded ED2K hasher
 Build ed2k.c with -lssl and -lcrypto (from libssl-dev) and -lpthread. e.g. on my mac:
 
 ```
-clang -I/usr/local/opt/openssl/include -L/usr/local/opt/openssl/lib -lssl -lcrypto thread_t/threads_posix.c queue_t/queue.c vector_t/vector.c ed2k.c
+clang -I/usr/local/opt/openssl/include -L/usr/local/opt/openssl/lib -lssl -lcrypto -lpthread ed2k.c
 ```
 
 ## License
