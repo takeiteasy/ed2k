@@ -14,13 +14,16 @@
 // 2423660392
 
 typedef struct {
-  int       id, fh;
+  int       id,
+            fh;
   size_t    fs;
-  queue_t  *q1, *q2;
+  queue_t  *q1,
+           *q2;
 } hasher_arg;
 
 typedef struct {
-  int*     finished;
+  int*     finished,
+           uneven;
   queue_t* q;
 } ed2k_arg;
 
@@ -78,7 +81,6 @@ void ed2k(void* arg) {
       hash_t* h = (hash_t*)qn->data;
       if (h->id == next) {
         MD4_Update(&root, h->hash, MD4_DIGEST_LENGTH);
-        printf("%d\n", h->id);
         ++next;
         free(h);
         free(qn);
@@ -91,12 +93,14 @@ void ed2k(void* arg) {
       hash_t* tmp = (hash_t*)vector_get(v, i);
       if (tmp->id == next) {
         MD4_Update(&root, tmp->hash, MD4_DIGEST_LENGTH);
-        printf("%d\n", tmp->id);
         ++next;
         vector_del(v, i);
       }
     }
   }
+
+  if (!e->uneven)
+    MD4_Update(&root, NULL, 0);
 
   unsigned char md [MD4_DIGEST_LENGTH];
   MD4_Final(md, &root);
@@ -132,23 +136,15 @@ int main() {
     queue_add(q1, (void*)chunk, sizeof(i));
   }
 
-  // queue_node_t* qn;
-  // while (q1->nodes) {
-  //   qn = queue_get(q1);
-  //   chunk_t* c = (chunk_t*)qn->data;
-  //   printf("%lu -- %d\n", c->offset, c->id);
-  //   free(qn);
-  // }
-  // exit(1);
-
-  int running = 1;
+  int running  = 1;
   queue_t* q2  = queue_init();
   ed2k_arg* e  = (ed2k_arg*)malloc(sizeof(ed2k_arg));
   e->q         = q2;
   e->finished  = &running;
+  e->uneven    = (f_size % CHUNK_SIZE);
   thrd_t t1    = (thrd_t)malloc(sizeof(thrd_t));
   thrd_create(&t1, ed2k, (void*)e);
-  thrd_t* t2  = (thrd_t*)malloc(THREADS * sizeof(thrd_t));
+  thrd_t* t2   = (thrd_t*)malloc(THREADS * sizeof(thrd_t));
 
   for (int i = 0; i < THREADS; ++i) {
     hasher_arg* ha = (hasher_arg*)malloc(sizeof(hasher_arg));
