@@ -22,11 +22,14 @@ typedef struct {
 typedef struct {
   int*     finished;
   int      uneven;
+  char*    fn;
+  size_t   fs;
   queue_t* q;
 } ed2k_arg;
 
 typedef struct {
   int    fh;
+  char*  fn;
   size_t fs;
 } md4_arg;
 
@@ -115,7 +118,7 @@ void ed2k(void* arg) {
   char* result = (char*)malloc(MD4_DIGEST_LENGTH * 2 * sizeof(char*));
   for(int i; i < MD4_DIGEST_LENGTH; ++i)
     sprintf(&result[i * 2], "%02x", (unsigned int)md[i]);
-  printf("%s\n", result);
+  printf("ed2k://|file|%s|%lu|%s|\n", e->fn, e->fs, result);
 
   vector_free(v);
   free(result);
@@ -136,70 +139,100 @@ void md4(void* arg) {
   char* result = malloc(MD4_DIGEST_LENGTH * 2 * sizeof(char*));
   for(int i; i < MD4_DIGEST_LENGTH; ++i)
     sprintf(&result[i * 2], "%02x", (unsigned int)md[i]);
-  printf("%s\n", result);
+  printf("ed2k://|file|%s|%lu|%s|\n", m->fn, m->fs, result);
 
   free(m);
   munmap(data, m->fs);
 }
 
-int main() {
-  char* test = "/Users/rusty/dev/ed2k/test1.avi";
-  int fh     = open(test, O_RDONLY);
-  if (fh < 0)
-    return -1;
-
-  struct stat s;
-  int status = fstat (fh, &s);
-  if (status < 0)
-    return -1;
-  size_t f_size = s.st_size;
-
-  if (f_size < CHUNK_SIZE) {
-    md4_arg* m = (md4_arg*)malloc(sizeof(md4_arg));
-    m->fh      = fh;
-    m->fs      = f_size;
-    md4((void*)m);
-  } else {
-    queue_t* q1 = queue_init();
-    size_t   i  = 0;
-    int      j  = 0;
-    for (; i < f_size; i += CHUNK_SIZE) {
-      chunk_t* chunk = (chunk_t*)malloc(sizeof(chunk_t));
-      chunk->offset  = i;
-      chunk->id      = j++;
-      queue_add(q1, (void*)chunk, sizeof(i));
+void handle_file(void* arg) {
+  queue_t* q = (queue_t*)arg;
+  queue_node_t* qn;
+  while (q->nodes) {
+    qn = queue_get(q);
+    char* fn = (char*)qn->data;
+    int fh   = open(fn, O_RDONLY);
+    if (fh < 0) {
+      printf("Failed to open \"%s\"\n", fn);
+      exit(-1);
     }
 
-    int running  = 1;
-    queue_t* q2  = queue_init();
-    ed2k_arg* e  = (ed2k_arg*)malloc(sizeof(ed2k_arg));
-    e->q         = q2;
-    e->finished  = &running;
-    e->uneven    = (f_size % CHUNK_SIZE);
-    thrd_t t1    = (thrd_t)malloc(sizeof(thrd_t));
-    thrd_create(&t1, ed2k, (void*)e);
-    thrd_t* t2   = (thrd_t*)malloc(THREADS * sizeof(thrd_t));
-
-    for (int i = 0; i < THREADS; ++i) {
-      hasher_arg* ha = (hasher_arg*)malloc(sizeof(hasher_arg));
-      ha->id         = i;
-      ha->fh         = fh;
-      ha->fs         = f_size;
-      ha->q1         = q1;
-      ha->q2         = q2;
-      thrd_create(&t2[i], hasher, (void*)ha);
+    struct stat s;
+    int status = fstat (fh, &s);
+    if (status < 0) {
+      printf("Failed to open \"%s\"\n", fn);
+      exit(-1);
     }
-    for (int i = 0; i < THREADS; ++i)
-      thrd_join(t2[i], NULL);
-    running = 0;
-    thrd_join(t1, NULL);
+    size_t f_size = s.st_size;
 
-    free(t2);
-    free(q1);
-    free(q2);
-    free(e);
+    if (f_size < CHUNK_SIZE) {
+      md4_arg* m = (md4_arg*)malloc(sizeof(md4_arg));
+      m->fh      = fh;
+      m->fs      = f_size;
+      m->fn      = fn;
+      md4((void*)m);
+    } else {
+      queue_t* q1 = queue_init();
+      size_t   i  = 0;
+      int      j  = 0;
+      for (; i < f_size; i += CHUNK_SIZE) {
+        chunk_t* chunk = (chunk_t*)malloc(sizeof(chunk_t));
+        chunk->offset  = i;
+        chunk->id      = j++;
+        queue_add(q1, (void*)chunk, sizeof(i));
+      }
+
+      int running  = 1;
+      queue_t* q2  = queue_init();
+      ed2k_arg* e  = (ed2k_arg*)malloc(sizeof(ed2k_arg));
+      e->q         = q2;
+      e->finished  = &running;
+      e->uneven    = (f_size % CHUNK_SIZE);
+      e->fn        = fn;
+      e->fs        = f_size;
+      thrd_t t1    = (thrd_t)malloc(sizeof(thrd_t));
+      thrd_create(&t1, ed2k, (void*)e);
+      thrd_t* t2   = (thrd_t*)malloc(THREADS * sizeof(thrd_t));
+
+      for (int i = 0; i < THREADS; ++i) {
+        hasher_arg* ha = (hasher_arg*)malloc(sizeof(hasher_arg));
+        ha->id         = i;
+        ha->fh         = fh;
+        ha->fs         = f_size;
+        ha->q1         = q1;
+        ha->q2         = q2;
+        thrd_create(&t2[i], hasher, (void*)ha);
+      }
+      for (int i = 0; i < THREADS; ++i)
+        thrd_join(t2[i], NULL);
+      running = 0;
+      thrd_join(t1, NULL);
+
+      free(t2);
+      free(q1);
+      free(q2);
+      free(e);
+    }
+
+    close(fh);
+    free(qn);
+    thrd_yield();
   }
-  close(fh);
+}
+
+int main(int argc, char* argv[]) {
+  queue_t* q = queue_init();
+  for (int i = 1; i < argc; ++i)
+    queue_add(q, (void*)argv[i], sizeof(argv[i]));
+
+  thrd_t* t = (thrd_t*)malloc(THREADS * sizeof(thrd_t));
+  for (int i = 0; i < THREADS; ++i)
+    thrd_create(&t[i], handle_file, (void*)q);
+  for (int i = 0; i < THREADS; ++i)
+    thrd_join(t[i], NULL);
+
+  free(t);
+  free(q);
 
   return 0;
 }
