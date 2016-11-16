@@ -1,4 +1,5 @@
 a.out
-secret
 *.sh
+build
+log
 test*
