@@ -2,3 +2,4 @@ a.out
 *.sh
 build
 log
+test*
