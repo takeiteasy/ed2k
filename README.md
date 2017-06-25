@@ -4,13 +4,13 @@ Simple multi-threaded ED2K hasher
 ```
 ./a.out ~/somewhere/someplace/*.mkv
 > /Users/rusty/Downloads/test.mp4|153124388|cf29387ea0ab5be2c3ec96aa11afce0a
-> {PATH}|{SIZE}|{HASH}
+> ed2k://|file|{PATH}|{SIZE}|{HASH}
 ```
 
 Build ed2k.c with -lssl and -lcrypto (from libssl-dev) and -lpthread. e.g. on my mac:
 
 ```
-clang -I/usr/local/opt/openssl/include -L/usr/local/opt/openssl/lib -lssl -lcrypto thread_t/threads_posix.c queue_t/queue.c vector_t/vector.c ed2k.c
+clang -I/usr/local/opt/openssl/include -L/usr/local/opt/openssl/lib -lssl -lcrypto ed2k.c
 ```
 
 ## License
